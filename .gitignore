@@ -1,0 +1,15 @@
+.DS_Store
+obj_dir/
+csrc/
+ucli.key
+*.daidir
+DVEfiles/
+novas*
+verdiLog/
+*.vpd
+*.vcd
+*.fsdb
+vcs_compile.log
+sim.log
+sim_fsdb.log
+simv*
