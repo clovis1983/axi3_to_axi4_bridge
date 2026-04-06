@@ -440,12 +440,12 @@ module axi3_to_axi4_tb;
       end else begin
         $display("[TB] FSDB file default: %0s", fsdb_name);
       end
-`ifdef VERILATOR
-      $dumpfile(fsdb_name);
-      $dumpvars(0, axi3_to_axi4_tb);
-`else
+`ifdef VCS
       $fsdbDumpfile(fsdb_name);
       $fsdbDumpvars(0, axi3_to_axi4_tb);
+`else
+      $dumpfile(fsdb_name);
+      $dumpvars(0, axi3_to_axi4_tb);
 `endif
     end
 
@@ -522,10 +522,10 @@ module axi3_to_axi4_tb;
       $display("[TB] FAIL, err_cnt=%0d", err_cnt);
     end
     if ($test$plusargs("DUMP_FSDB")) begin
-`ifdef VERILATOR
-      $dumpflush;
-`else
+`ifdef VCS
       $fsdbDumpflush;
+`else
+      $dumpflush;
 `endif
     end
     $finish;
