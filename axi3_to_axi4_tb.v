@@ -151,6 +151,13 @@ module axi3_to_axi4_tb;
   reg [7:0]            r_ctx_len;
   reg [7:0]            r_ctx_beat;
 
+  reg [7:0]            wr_seq_len [0:9];
+  reg [7:0]            rd_seq_len [0:9];
+
+  reg [7:0]            aw_ready_lfsr;
+  reg [7:0]            w_ready_lfsr;
+  reg [7:0]            ar_ready_lfsr;
+
   integer i;
 
   axi3_to_axi4_bridge #(
@@ -220,6 +227,22 @@ module axi3_to_axi4_tb;
   end
   endfunction
 
+  function [7:0] pseudo_len(input integer seed);
+    reg [31:0] seed_u32;
+  begin
+    seed_u32 = (seed * 32'd13) + 32'd7;
+    pseudo_len = seed_u32[1:0];
+  end
+  endfunction
+
+  function [7:0] next_lfsr8(input [7:0] cur);
+    reg feedback;
+  begin
+    feedback = cur[7] ^ cur[5] ^ cur[4] ^ cur[3];
+    next_lfsr8 = {cur[6:0], feedback};
+  end
+  endfunction
+
   task add_step(
     input [2:0] op,
     input [ID_WIDTH-1:0] id,
@@ -278,11 +301,17 @@ module axi3_to_axi4_tb;
 
   task build_write_only_test;
     integer idx;
+    integer beat;
+    reg [7:0] len;
   begin
     $display("[TB] Write-only sequence: 10 commands");
     for (idx = 0; idx < 10; idx = idx + 1) begin
-      add_aw(idx[ID_WIDTH-1:0], 32'h1000 + idx * 8, 8'd0, 1'b0);
-      add_w(idx[ID_WIDTH-1:0], make_data(idx), 1'b1);
+      len = pseudo_len(idx);
+      wr_seq_len[idx] = len;
+      add_aw(idx[ID_WIDTH-1:0], 32'h1000 + idx * 32, len, 1'b0);
+      for (beat = 0; beat <= len; beat = beat + 1) begin
+        add_w(idx[ID_WIDTH-1:0], make_data((idx * 16) + beat), (beat == len));
+      end
       add_expect_b(idx[ID_WIDTH-1:0], RESP_OKAY);
     end
   end
@@ -290,13 +319,19 @@ module axi3_to_axi4_tb;
 
   task build_read_only_test;
     integer idx;
+    integer beat;
     reg [ID_WIDTH-1:0] id;
+    reg [7:0] len;
   begin
     $display("[TB] Read-only sequence: 10 commands");
     for (idx = 0; idx < 10; idx = idx + 1) begin
       id = 8'h40 + idx[7:0];
-      add_ar(id, 32'h1000 + idx * 8, 8'd0, 1'b0);
-      add_expect_r(id, make_data(idx), 1'b1, RESP_OKAY);
+      len = wr_seq_len[idx];
+      rd_seq_len[idx] = len;
+      add_ar(id, 32'h1000 + idx * 32, len, 1'b0);
+      for (beat = 0; beat <= len; beat = beat + 1) begin
+        add_expect_r(id, make_data((idx * 16) + beat), (beat == len), RESP_OKAY);
+      end
     end
   end
   endtask
@@ -508,10 +543,22 @@ module axi3_to_axi4_tb;
       r_ctx_len      <= '0;
       r_ctx_beat     <= '0;
 
+      aw_ready_lfsr  <= 8'hA5;
+      w_ready_lfsr   <= 8'hD3;
+      ar_ready_lfsr  <= 8'h79;
+
       for (i = 0; i < MEM_WORDS; i = i + 1) begin
         mem[i] <= '0;
       end
     end else begin
+      aw_ready_lfsr <= next_lfsr8(aw_ready_lfsr);
+      w_ready_lfsr  <= next_lfsr8(w_ready_lfsr);
+      ar_ready_lfsr <= next_lfsr8(ar_ready_lfsr);
+
+      M_AXI4_AWREADY <= aw_ready_lfsr[0] | aw_ready_lfsr[3];
+      M_AXI4_WREADY  <= w_ready_lfsr[0] | w_ready_lfsr[2];
+      M_AXI4_ARREADY <= ar_ready_lfsr[0] | ar_ready_lfsr[4];
+
       if (M_AXI4_AWVALID && M_AXI4_AWREADY) begin
         awid_q[aw_tail]   <= M_AXI4_AWID;
         awaddr_q[aw_tail] <= M_AXI4_AWADDR;
