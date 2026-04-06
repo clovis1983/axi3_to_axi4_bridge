@@ -6,6 +6,8 @@ FSDB_FILE  ?= axi3_to_axi4.fsdb
 NOVAS_HOME ?=
 NOVAS_ARCH ?= LINUX64
 VERILATOR  ?= verilator
+IVERILOG   ?= iverilog
+VVP        ?= vvp
 SDKROOT    ?= $(shell xcrun --show-sdk-path 2>/dev/null)
 CXX        ?= clang++
 LIBCXX_INC ?= $(SDKROOT)/usr/include/c++/v1
@@ -46,6 +48,10 @@ check_vcs:
 check_verilator:
 	@command -v $(VERILATOR) >/dev/null 2>&1 || (echo "ERROR: '$(VERILATOR)' not found in PATH" && exit 127)
 
+check_iverilog:
+	@command -v $(IVERILOG) >/dev/null 2>&1 || (echo "ERROR: '$(IVERILOG)' not found in PATH" && exit 127)
+	@command -v $(VVP) >/dev/null 2>&1 || (echo "ERROR: '$(VVP)' not found in PATH" && exit 127)
+
 compile_vcs: check_vcs
 	@echo "[VCS] Compile $(TOP)"
 	$(VCS) $(VCS_FLAGS) $(FSDB_PLI) -top $(TOP) $(SRC_FILES) -o $(SIMV) -l $(COMPILE_LOG)
@@ -53,6 +59,10 @@ compile_vcs: check_vcs
 compile_verilator: check_verilator
 	@echo "[Verilator] Compile $(TOP)"
 	SDKROOT="$(SDKROOT)" CXX="$(CXX)" CPPFLAGS="-isysroot $(SDKROOT) -isystem $(LIBCXX_INC)" CXXFLAGS="-isysroot $(SDKROOT) -isystem $(LIBCXX_INC)" $(VERILATOR) $(VERILATOR_FLAGS) -top $(TOP) $(SRC_FILES)
+
+compile_iverilog: check_iverilog
+	@echo "[Icarus] Compile $(TOP)"
+	$(IVERILOG) -g2012 -o simv_iverilog $(SRC_FILES)
 
 compile:
 ifeq ($(SIM_BACKEND),vcs)
@@ -71,6 +81,10 @@ run_vcs: compile_vcs
 run_verilator: compile_verilator
 	@echo "[Verilator] Run"
 	./obj_dir/V$(TOP) $(SIM_FLAGS)
+
+run_iverilog: compile_iverilog
+	@echo "[Icarus] Run"
+	$(VVP) simv_iverilog $(SIM_FLAGS)
 
 run: 
 ifeq ($(SIM_BACKEND),vcs)
@@ -102,11 +116,12 @@ run_gui: run_fsdb
 
 clean:
 	rm -rf csrc ucli.key *.daidir DVEfiles novas* verdiLog *.vpd *.vcd *.fsdb
-	rm -f $(SIMV) $(COMPILE_LOG) $(RUN_LOG) $(RUN_FSDB_LOG)
+	rm -f $(SIMV) simv_iverilog $(COMPILE_LOG) $(RUN_LOG) $(RUN_FSDB_LOG)
 
 help:
 	@echo "Targets:"
 	@echo "  make run                 # compile + run"
+	@echo "  make run_iverilog        # compile + run with Icarus Verilog"
 	@echo "  make run_fsdb            # compile + run + generate FSDB"
 	@echo "  make run_gui             # run_fsdb and open verdi"
 	@echo "  make clean               # cleanup"
@@ -121,4 +136,4 @@ help:
 	@echo "  NOVAS_HOME=$(NOVAS_HOME)"
 	@echo "  NOVAS_ARCH=$(NOVAS_ARCH)"
 
-.PHONY: all check_vcs check_verilator compile compile_vcs compile_verilator run run_vcs run_verilator run_fsdb run_gui clean help
+.PHONY: all check_vcs check_verilator check_iverilog compile compile_vcs compile_verilator compile_iverilog run run_vcs run_verilator run_iverilog run_fsdb run_gui clean help
