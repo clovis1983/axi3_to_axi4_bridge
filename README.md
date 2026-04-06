@@ -112,6 +112,66 @@ The testbench includes several test scenarios:
 - Maximum burst length limited by AXI3 (16 beats)
 - Fixed QoS = 0 (configurable in future versions)
 
+## Exception Handling
+
+This bridge does not forward unsupported AXI3 locked transactions to AXI4. Instead, it terminates them locally and returns an error response on the AXI3 side.
+
+### Locked Write Handling
+
+- `S_AXI3_AWLOCK=1` write commands are accepted on the AXI3 AW channel
+- The locked write address is not forwarded to the AXI4 AW channel
+- AXI3 write data is still consumed on the W channel so the AXI3 master can complete the burst cleanly
+- After the final write beat, the bridge generates a local AXI3 write response:
+  - `BID` matches the original AXI3 write ID
+  - `BRESP = SLVERR (2'b10)`
+- No AXI4 write response is involved for the locked transaction
+
+### Locked Read Handling
+
+- `S_AXI3_ARLOCK=1` read commands are accepted on the AXI3 AR channel
+- The locked read address is not forwarded to the AXI4 AR channel
+- The bridge generates a local AXI3 read response immediately as a single-beat error completion:
+  - `RID` matches the original AXI3 read ID
+  - `RRESP = SLVERR (2'b10)`
+  - `RLAST = 1'b1`
+- `RDATA = 0`
+- No AXI4 read request or AXI4 read data is involved for the locked transaction
+- Even if the incoming AXI3 locked read carries a burst length greater than zero, the bridge terminates it locally as a single-beat error response
+
+### Backpressure and Resource Limits
+
+- AXI3 AW acceptance is backpressured when the internal write tracking FIFO is full
+- Non-locked AXI3 AW acceptance is also backpressured if the AXI4 write-address forwarding FIFO is full
+- Locked AXI3 AW acceptance is backpressured if the local write-error response FIFO is full
+- AXI3 AR acceptance is backpressured when the configured non-locked read outstanding limit is reached
+- Non-locked AXI3 AR acceptance is also backpressured if the AXI4 read-address forwarding FIFO is full
+- Locked AXI3 AR acceptance is backpressured if the local read-error response FIFO is full
+
+### Response Arbitration Priority
+
+- Local error responses for unsupported locked transactions take priority over incoming AXI4 responses on the AXI3-facing side
+- While a local write error response is pending, AXI4 `BREADY` is deasserted and AXI4 write responses are temporarily held off
+- While a local read error response is pending, AXI4 `RREADY` is deasserted and AXI4 read data is temporarily held off
+- This guarantees that locally generated `SLVERR` completions are returned in a controlled way before normal forwarded AXI4 responses resume
+
+### Reset Behavior
+
+- On reset, all internal outstanding counters, FIFOs, local error queues, and in-flight AXI4 address valid signals are cleared
+- Any partially tracked transaction state inside the bridge is discarded when `ARESETn` is asserted low
+- After reset release, the bridge restarts from an empty state and only tracks newly accepted AXI3 transactions
+
+### Other Unsupported Behavior
+
+- AXI3 write interleaving is not supported
+- Write bursts are serialized in AW order before being forwarded to AXI4
+- `WID` is ignored by the bridge and does not select among interleaved write streams
+
+### Error Containment Policy
+
+- Unsupported locked accesses are handled locally on the AXI3-facing side
+- Normal non-locked AXI3 read and write transactions continue to be translated and forwarded to AXI4
+- AXI4 `AWQOS` and `ARQOS` are always driven to `0`
+
 ## Compliance
 
 This implementation follows ARM's recommendations for AXI4 migration:
