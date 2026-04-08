@@ -5,7 +5,7 @@ A Verilog RTL implementation of an AXI3 to AXI4 bridge that converts AXI3 protoc
 ## Features
 
 - **AXI3 to AXI4 Conversion**: Full conversion from AXI3 slave interface to AXI4 master interface
-- **No Locked Transactions**: Does not support AXI3 locked transactions (as per ARM recommendation)
+- **LOCK Downgrade for AXI3->AXI4**: Accepts AXI3 `AWLOCK/ARLOCK`, but downgrades to normal AXI4 transfers
 - **No Write Interleaving**: Does not support AXI3 write data interleaving (as per ARM recommendation)
 - **Multiple Outstanding Reads**: Supports multiple concurrent read transactions
 - **Multiple AW Outstanding**: Supports multiple write address outstanding with serialized write data
@@ -22,7 +22,7 @@ A Verilog RTL implementation of an AXI3 to AXI4 bridge that converts AXI3 protoc
 
 #### AXI4 Master Interface (Output)  
 - `M_AXI4_*`: All standard AXI4 signals with appropriate signal mapping
-- Excludes LOCK signals (not present in AXI4)
+- No dedicated `AxLOCK` output in this subset bridge; incoming AXI3 lock requests are downgraded to normal transfers
 - QoS signals fixed to 0
 
 ### Key Implementation Details
@@ -38,7 +38,7 @@ A Verilog RTL implementation of an AXI3 to AXI4 bridge that converts AXI3 protoc
    - Proper B response handling
 
 3. **Protocol Compliance**:
-   - Removes LOCK signal support (AXI4 does not have LOCK)
+   - Downgrades AXI3 locked requests to normal AXI4 requests (lock semantics are not preserved)
    - Fixes QoS to 0 as specified
    - Handles burst length differences between protocols
 
@@ -99,7 +99,7 @@ The testbench includes several test scenarios:
 
 | Feature | AXI3 | AXI4 | Bridge Handling |
 |---------|------|------|----------------|
-| LOCK signal | Present | Removed | Ignored (not supported) |
+| LOCK signal | Present | Different encoding/semantics | Accepted then downgraded to normal transfer |
 | Write interleaving | Supported | Removed | Serialized by burst |
 | Burst length | 4-bit (max 16) | 8-bit (max 256) | Zero extended |
 | QoS | Present | Present | Fixed to 0 |
@@ -107,56 +107,45 @@ The testbench includes several test scenarios:
 
 ## Limitations
 
-- No support for AXI3 exclusive access (LOCK signal removed)
+- AXI3 lock semantics are not preserved end-to-end (downgraded to normal accesses)
 - No support for write data interleaving
 - Maximum burst length limited by AXI3 (16 beats)
 - Fixed QoS = 0 (configurable in future versions)
 
-## Exception Handling
+## Lock Handling
 
-This bridge does not forward unsupported AXI3 locked transactions to AXI4. Instead, it terminates them locally and returns an error response on the AXI3 side.
+This bridge accepts AXI3 requests with `AWLOCK/ARLOCK=1`, but converts them into normal AXI4 read/write transactions.
 
 ### Locked Write Handling
 
-- `S_AXI3_AWLOCK=1` write commands are accepted on the AXI3 AW channel
-- The locked write address is not forwarded to the AXI4 AW channel
-- AXI3 write data is still consumed on the W channel so the AXI3 master can complete the burst cleanly
-- After the final write beat, the bridge generates a local AXI3 write response:
-  - `BID` matches the original AXI3 write ID
-  - `BRESP = SLVERR (2'b10)`
-- No AXI4 write response is involved for the locked transaction
+- `S_AXI3_AWLOCK=1` write commands are accepted on AXI3 AW
+- The write address is forwarded to AXI4 AW as a normal write transaction
+- AXI3 W data is forwarded to AXI4 W in normal burst order
+- Write response comes from AXI4 B channel and is returned to AXI3 directly
+- No local `SLVERR` is generated only because `AWLOCK=1`
 
 ### Locked Read Handling
 
-- `S_AXI3_ARLOCK=1` read commands are accepted on the AXI3 AR channel
-- The locked read address is not forwarded to the AXI4 AR channel
-- The bridge generates a local AXI3 read response immediately as a single-beat error completion:
-  - `RID` matches the original AXI3 read ID
-  - `RRESP = SLVERR (2'b10)`
-  - `RLAST = 1'b1`
-- `RDATA = 0`
-- No AXI4 read request or AXI4 read data is involved for the locked transaction
-- Even if the incoming AXI3 locked read carries a burst length greater than zero, the bridge terminates it locally as a single-beat error response
+- `S_AXI3_ARLOCK=1` read commands are accepted on AXI3 AR
+- The read address is forwarded to AXI4 AR as a normal read transaction
+- Read data/response comes from AXI4 R channel and is returned to AXI3 directly
+- No local single-beat error completion is generated only because `ARLOCK=1`
 
 ### Backpressure and Resource Limits
 
 - AXI3 AW acceptance is backpressured when the internal write tracking FIFO is full
-- Non-locked AXI3 AW acceptance is also backpressured if the AXI4 write-address forwarding FIFO is full
-- Locked AXI3 AW acceptance is backpressured if the local write-error response FIFO is full
-- AXI3 AR acceptance is backpressured when the configured non-locked read outstanding limit is reached
-- Non-locked AXI3 AR acceptance is also backpressured if the AXI4 read-address forwarding FIFO is full
-- Locked AXI3 AR acceptance is backpressured if the local read-error response FIFO is full
+- AXI3 AW acceptance is also backpressured if the AXI4 write-address forwarding FIFO is full
+- AXI3 AR acceptance is backpressured when the configured read outstanding limit is reached
+- AXI3 AR acceptance is also backpressured if the AXI4 read-address forwarding FIFO is full
 
 ### Response Arbitration Priority
 
-- Local error responses for unsupported locked transactions take priority over incoming AXI4 responses on the AXI3-facing side
-- While a local write error response is pending, AXI4 `BREADY` is deasserted and AXI4 write responses are temporarily held off
-- While a local read error response is pending, AXI4 `RREADY` is deasserted and AXI4 read data is temporarily held off
-- This guarantees that locally generated `SLVERR` completions are returned in a controlled way before normal forwarded AXI4 responses resume
+- AXI3-facing B/R responses follow AXI4 return ordering for forwarded transactions
+- The bridge does not insert lock-specific local error responses
 
 ### Reset Behavior
 
-- On reset, all internal outstanding counters, FIFOs, local error queues, and in-flight AXI4 address valid signals are cleared
+- On reset, all internal outstanding counters, FIFOs, and in-flight AXI4 address valid signals are cleared
 - Any partially tracked transaction state inside the bridge is discarded when `ARESETn` is asserted low
 - After reset release, the bridge restarts from an empty state and only tracks newly accepted AXI3 transactions
 
@@ -168,13 +157,13 @@ This bridge does not forward unsupported AXI3 locked transactions to AXI4. Inste
 
 ### Error Containment Policy
 
-- Unsupported locked accesses are handled locally on the AXI3-facing side
-- Normal non-locked AXI3 read and write transactions continue to be translated and forwarded to AXI4
+- AXI3 locked and non-locked accesses are translated and forwarded to AXI4 in the same datapath
+- Lock-related exclusivity/atomicity semantics are intentionally not preserved by this bridge
 - AXI4 `AWQOS` and `ARQOS` are always driven to `0`
 
 ## Compliance
 
 This implementation follows ARM's recommendations for AXI4 migration:
-- Removal of locked transactions for improved performance
+- AXI3 lock requests are accepted but downgraded to normal AXI4 transactions
 - Elimination of write interleaving for simplified design
 - Proper protocol conversion between versions

@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // AXI3 -> AXI4 Bridge (pragmatic subset)
-// 1) AXI3 locked transaction not supported: return SLVERR locally
+// 1) AXI3 locked transaction is downgraded to normal AXI4 transaction
 // 2) AXI3 write interleaving not supported: W channel serialized by AW order
 // 3) Multiple read outstanding supported (for non-locked AR)
 // 4) Multiple AW outstanding supported; W bursts forwarded serially
@@ -104,7 +104,6 @@ module axi3_to_axi4_bridge #(
     output wire                   M_AXI4_RREADY
 );
 
-localparam [1:0] RESP_SLVERR = 2'b10;
 localparam integer WR_PTR_W  = (MAX_OUTSTANDING_WRITES <= 2) ? 1 : $clog2(MAX_OUTSTANDING_WRITES);
 localparam integer RD_PTR_W  = (MAX_OUTSTANDING_READS  <= 2) ? 1 : $clog2(MAX_OUTSTANDING_READS);
 localparam [WR_PTR_W:0] MAX_WR_CNT = MAX_OUTSTANDING_WRITES;
@@ -118,7 +117,6 @@ assign M_AXI4_ARQOS = 4'b0000;
 // ============================================================
 reg [ID_WIDTH-1:0]    wr_id_fifo     [0:MAX_OUTSTANDING_WRITES-1];
 reg [7:0]             wr_len_fifo    [0:MAX_OUTSTANDING_WRITES-1];
-reg                   wr_lock_fifo   [0:MAX_OUTSTANDING_WRITES-1];
 reg [WR_PTR_W-1:0]    wr_head_ptr, wr_tail_ptr;
 reg [WR_PTR_W:0]      wr_count;
 
@@ -132,48 +130,37 @@ reg [2:0]             awf_prot_fifo  [0:MAX_OUTSTANDING_WRITES-1];
 reg [WR_PTR_W-1:0]    awf_head_ptr, awf_tail_ptr;
 reg [WR_PTR_W:0]      awf_count;
 
-reg [ID_WIDTH-1:0]    berr_id_fifo   [0:MAX_OUTSTANDING_WRITES-1];
-reg [WR_PTR_W-1:0]    berr_head_ptr, berr_tail_ptr;
-reg [WR_PTR_W:0]      berr_count;
-
 reg                   w_active;
-reg                   w_cur_locked;
-reg [ID_WIDTH-1:0]    w_cur_id;
 reg [7:0]             w_cur_len;
 reg [7:0]             w_beat_cnt;
 reg [WR_PTR_W:0]      wr_aw_credit;
 
 wire wr_fifo_full   = (wr_count  == MAX_WR_CNT);
 wire awf_fifo_full  = (awf_count == MAX_WR_CNT);
-wire berr_fifo_full = (berr_count== MAX_WR_CNT);
-
-wire aw_is_locked   = S_AXI3_AWLOCK;
-wire aw_accept_ok   = !wr_fifo_full && (aw_is_locked ? !berr_fifo_full : !awf_fifo_full);
+wire aw_accept_ok   = !wr_fifo_full && !awf_fifo_full;
 wire aw_hs          = S_AXI3_AWVALID && S_AXI3_AWREADY;
 wire awf_pop        = M_AXI4_AWVALID && M_AXI4_AWREADY;
-wire awf_push       = aw_hs && !aw_is_locked;
+wire awf_push       = aw_hs;
 
 assign S_AXI3_AWREADY = aw_accept_ok;
 
 wire w_fire         = S_AXI3_WVALID && S_AXI3_WREADY;
 wire w_last_by_cnt  = (w_beat_cnt == w_cur_len);
-wire w_can_start    = (wr_count != 0) && (wr_lock_fifo[wr_head_ptr] || (wr_aw_credit != 0));
-wire w_start_nonlocked = (!w_active && w_can_start && !wr_lock_fifo[wr_head_ptr]);
+wire w_can_start    = (wr_count != 0) && (wr_aw_credit != 0);
+wire w_start_nonlocked = (!w_active && w_can_start);
 wire wr_pop         = w_active && w_fire && w_last_by_cnt;
 wire wr_push        = aw_hs;
-wire berr_push      = wr_pop && w_cur_locked;
 
 assign M_AXI4_WDATA  = S_AXI3_WDATA;
 assign M_AXI4_WSTRB  = S_AXI3_WSTRB;
 assign M_AXI4_WLAST  = w_last_by_cnt;
-assign M_AXI4_WVALID = w_active && !w_cur_locked && S_AXI3_WVALID;
-assign S_AXI3_WREADY = w_active && (w_cur_locked ? 1'b1 : M_AXI4_WREADY);
+assign M_AXI4_WVALID = w_active && S_AXI3_WVALID;
+assign S_AXI3_WREADY = w_active && M_AXI4_WREADY;
 
-wire berr_pending = (berr_count != 0);
-assign S_AXI3_BVALID = berr_pending ? 1'b1 : M_AXI4_BVALID;
-assign S_AXI3_BID    = berr_pending ? berr_id_fifo[berr_head_ptr] : M_AXI4_BID;
-assign S_AXI3_BRESP  = berr_pending ? RESP_SLVERR : M_AXI4_BRESP;
-assign M_AXI4_BREADY = berr_pending ? 1'b0 : S_AXI3_BREADY;
+assign S_AXI3_BVALID = M_AXI4_BVALID;
+assign S_AXI3_BID    = M_AXI4_BID;
+assign S_AXI3_BRESP  = M_AXI4_BRESP;
+assign M_AXI4_BREADY = S_AXI3_BREADY;
 
 // ============================================================
 // Read-side structures
@@ -188,33 +175,23 @@ reg [2:0]             arf_prot_fifo  [0:MAX_OUTSTANDING_READS-1];
 reg [RD_PTR_W-1:0]    arf_head_ptr, arf_tail_ptr;
 reg [RD_PTR_W:0]      arf_count;
 
-reg [ID_WIDTH-1:0]    rerr_id_fifo   [0:MAX_OUTSTANDING_READS-1];
-reg [RD_PTR_W-1:0]    rerr_head_ptr, rerr_tail_ptr;
-reg [RD_PTR_W:0]      rerr_count;
-
 reg [RD_PTR_W:0]      rd_outstanding_cnt;
 
 wire arf_fifo_full   = (arf_count == MAX_RD_CNT);
-wire rerr_fifo_full  = (rerr_count == MAX_RD_CNT);
-wire ar_is_locked    = S_AXI3_ARLOCK;
-wire ar_accept_ok    = ar_is_locked ? !rerr_fifo_full : (!arf_fifo_full && (rd_outstanding_cnt < MAX_RD_CNT));
+wire ar_accept_ok    = !arf_fifo_full && (rd_outstanding_cnt < MAX_RD_CNT);
 wire ar_hs           = S_AXI3_ARVALID && S_AXI3_ARREADY;
 wire arf_pop         = M_AXI4_ARVALID && M_AXI4_ARREADY;
-wire arf_push        = ar_hs && !ar_is_locked;
-wire rerr_push       = ar_hs && ar_is_locked;
+wire arf_push        = ar_hs;
 
 assign S_AXI3_ARREADY = ar_accept_ok;
 
-wire rerr_pending = (rerr_count != 0);
-wire berr_pop     = berr_pending && S_AXI3_BREADY;
-wire rd_pop       = !rerr_pending && M_AXI4_RVALID && S_AXI3_RREADY && M_AXI4_RLAST && (rd_outstanding_cnt != 0);
-assign S_AXI3_RVALID = rerr_pending ? 1'b1 : M_AXI4_RVALID;
-assign S_AXI3_RID    = rerr_pending ? rerr_id_fifo[rerr_head_ptr] : M_AXI4_RID;
-assign S_AXI3_RDATA  = rerr_pending ? {DATA_WIDTH{1'b0}} : M_AXI4_RDATA;
-assign S_AXI3_RRESP  = rerr_pending ? RESP_SLVERR : M_AXI4_RRESP;
-assign S_AXI3_RLAST  = rerr_pending ? 1'b1 : M_AXI4_RLAST;
-assign M_AXI4_RREADY = rerr_pending ? 1'b0 : S_AXI3_RREADY;
-wire rerr_pop     = rerr_pending && S_AXI3_RREADY;
+wire rd_pop       = M_AXI4_RVALID && S_AXI3_RREADY && M_AXI4_RLAST && (rd_outstanding_cnt != 0);
+assign S_AXI3_RVALID = M_AXI4_RVALID;
+assign S_AXI3_RID    = M_AXI4_RID;
+assign S_AXI3_RDATA  = M_AXI4_RDATA;
+assign S_AXI3_RRESP  = M_AXI4_RRESP;
+assign S_AXI3_RLAST  = M_AXI4_RLAST;
+assign M_AXI4_RREADY = S_AXI3_RREADY;
 
 // ============================================================
 // Sequential logic
@@ -223,7 +200,6 @@ always @(posedge ACLK or negedge ARESETn) begin
     if (!ARESETn) begin
         wr_head_ptr <= 'd0; wr_tail_ptr <= 'd0; wr_count <= 'd0;
         awf_head_ptr <= 'd0; awf_tail_ptr <= 'd0; awf_count <= 'd0;
-        berr_head_ptr <= 'd0; berr_tail_ptr <= 'd0; berr_count <= 'd0;
 
         M_AXI4_AWID <= 'd0;
         M_AXI4_AWADDR <= 'd0;
@@ -235,14 +211,11 @@ always @(posedge ACLK or negedge ARESETn) begin
         M_AXI4_AWVALID <= 1'b0;
 
         w_active <= 1'b0;
-        w_cur_locked <= 1'b0;
-        w_cur_id <= 'd0;
         w_cur_len <= 'd0;
         w_beat_cnt <= 'd0;
         wr_aw_credit <= 'd0;
 
         arf_head_ptr <= 'd0; arf_tail_ptr <= 'd0; arf_count <= 'd0;
-        rerr_head_ptr <= 'd0; rerr_tail_ptr <= 'd0; rerr_count <= 'd0;
         rd_outstanding_cnt <= 'd0;
 
         M_AXI4_ARID <= 'd0;
@@ -258,19 +231,16 @@ always @(posedge ACLK or negedge ARESETn) begin
         if (aw_hs) begin
             wr_id_fifo[wr_tail_ptr]   <= S_AXI3_AWID;
             wr_len_fifo[wr_tail_ptr]  <= S_AXI3_AWLEN;
-            wr_lock_fifo[wr_tail_ptr] <= aw_is_locked;
             wr_tail_ptr <= wr_tail_ptr + 1'b1;
 
-            if (!aw_is_locked) begin
-                awf_id_fifo[awf_tail_ptr]    <= S_AXI3_AWID;
-                awf_addr_fifo[awf_tail_ptr]  <= S_AXI3_AWADDR;
-                awf_len_fifo[awf_tail_ptr]   <= S_AXI3_AWLEN;
-                awf_size_fifo[awf_tail_ptr]  <= S_AXI3_AWSIZE;
-                awf_burst_fifo[awf_tail_ptr] <= S_AXI3_AWBURST;
-                awf_cache_fifo[awf_tail_ptr] <= S_AXI3_AWCACHE;
-                awf_prot_fifo[awf_tail_ptr]  <= S_AXI3_AWPROT;
-                awf_tail_ptr <= awf_tail_ptr + 1'b1;
-            end
+            awf_id_fifo[awf_tail_ptr]    <= S_AXI3_AWID;
+            awf_addr_fifo[awf_tail_ptr]  <= S_AXI3_AWADDR;
+            awf_len_fifo[awf_tail_ptr]   <= S_AXI3_AWLEN;
+            awf_size_fifo[awf_tail_ptr]  <= S_AXI3_AWSIZE;
+            awf_burst_fifo[awf_tail_ptr] <= S_AXI3_AWBURST;
+            awf_cache_fifo[awf_tail_ptr] <= S_AXI3_AWCACHE;
+            awf_prot_fifo[awf_tail_ptr]  <= S_AXI3_AWPROT;
+            awf_tail_ptr <= awf_tail_ptr + 1'b1;
         end
 
         case ({wr_push, wr_pop})
@@ -310,57 +280,28 @@ always @(posedge ACLK or negedge ARESETn) begin
         // ---------------- W serialize by burst ----------------
         if (!w_active && w_can_start) begin
             w_active <= 1'b1;
-            w_cur_locked <= wr_lock_fifo[wr_head_ptr];
-            w_cur_id <= wr_id_fifo[wr_head_ptr];
             w_cur_len <= wr_len_fifo[wr_head_ptr];
             w_beat_cnt <= 8'd0;
         end else if (w_active && w_fire) begin
             if (w_last_by_cnt) begin
                 w_active <= 1'b0;
                 wr_head_ptr <= wr_head_ptr + 1'b1;
-
-                if (w_cur_locked && !berr_fifo_full) begin
-                    berr_id_fifo[berr_tail_ptr] <= w_cur_id;
-                    berr_tail_ptr <= berr_tail_ptr + 1'b1;
-                end
             end else begin
                 w_beat_cnt <= w_beat_cnt + 1'b1;
             end
         end
 
-        case ({berr_push, berr_pop})
-            2'b10: berr_count <= berr_count + 1'b1;
-            2'b01: berr_count <= berr_count - 1'b1;
-            default: berr_count <= berr_count;
-        endcase
-
-        // local B error pop
-        if (berr_pop) begin
-            berr_head_ptr <= berr_head_ptr + 1'b1;
-        end
-
         // ---------------- AR accept ----------------
         if (ar_hs) begin
-            if (ar_is_locked) begin
-                rerr_id_fifo[rerr_tail_ptr] <= S_AXI3_ARID;
-                rerr_tail_ptr <= rerr_tail_ptr + 1'b1;
-            end else begin
-                arf_id_fifo[arf_tail_ptr]    <= S_AXI3_ARID;
-                arf_addr_fifo[arf_tail_ptr]  <= S_AXI3_ARADDR;
-                arf_len_fifo[arf_tail_ptr]   <= S_AXI3_ARLEN;
-                arf_size_fifo[arf_tail_ptr]  <= S_AXI3_ARSIZE;
-                arf_burst_fifo[arf_tail_ptr] <= S_AXI3_ARBURST;
-                arf_cache_fifo[arf_tail_ptr] <= S_AXI3_ARCACHE;
-                arf_prot_fifo[arf_tail_ptr]  <= S_AXI3_ARPROT;
-                arf_tail_ptr <= arf_tail_ptr + 1'b1;
-            end
+            arf_id_fifo[arf_tail_ptr]    <= S_AXI3_ARID;
+            arf_addr_fifo[arf_tail_ptr]  <= S_AXI3_ARADDR;
+            arf_len_fifo[arf_tail_ptr]   <= S_AXI3_ARLEN;
+            arf_size_fifo[arf_tail_ptr]  <= S_AXI3_ARSIZE;
+            arf_burst_fifo[arf_tail_ptr] <= S_AXI3_ARBURST;
+            arf_cache_fifo[arf_tail_ptr] <= S_AXI3_ARCACHE;
+            arf_prot_fifo[arf_tail_ptr]  <= S_AXI3_ARPROT;
+            arf_tail_ptr <= arf_tail_ptr + 1'b1;
         end
-
-        case ({rerr_push, rerr_pop})
-            2'b10: rerr_count <= rerr_count + 1'b1;
-            2'b01: rerr_count <= rerr_count - 1'b1;
-            default: rerr_count <= rerr_count;
-        endcase
 
         case ({arf_push, arf_pop})
             2'b10: arf_count <= arf_count + 1'b1;
@@ -389,14 +330,10 @@ always @(posedge ACLK or negedge ARESETn) begin
             arf_head_ptr <= arf_head_ptr + 1'b1;
         end
 
-        // local R error pop
-        if (rerr_pop) begin
-            rerr_head_ptr <= rerr_head_ptr + 1'b1;
-        end
     end
 end
 
 // Unused AXI3 inputs by policy
-wire _unused_ok = &{1'b0, S_AXI3_WID[0], S_AXI3_WLAST, S_AXI3_AWQOS[0], S_AXI3_ARQOS[0]};
+wire _unused_ok = &{1'b0, S_AXI3_WID[0], S_AXI3_WLAST, S_AXI3_AWQOS[0], S_AXI3_ARQOS[0], S_AXI3_AWLOCK, S_AXI3_ARLOCK};
 
 endmodule

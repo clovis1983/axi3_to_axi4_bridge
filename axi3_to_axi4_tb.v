@@ -408,15 +408,47 @@ module axi3_to_axi4_tb;
   end
   endtask
 
-  task build_lock_negative_test;
+  task build_lock_translation_test;
   begin
-    $display("[TB] Negative sequence: locked write/read return local SLVERR");
+    $display("[TB] Lock translation sequence: locked write/read are downgraded and forwarded");
     add_aw(8'hC0, 32'h5000, 8'd0, 1'b1);
     add_w(8'hC0, make_data(160), 1'b1);
-    add_expect_b(8'hC0, RESP_SLVERR);
+    add_expect_b(8'hC0, RESP_OKAY);
 
     add_ar(8'hC1, 32'h5000, 8'd0, 1'b1);
-    add_expect_r(8'hC1, {DATA_WIDTH{1'b0}}, 1'b1, RESP_SLVERR);
+    add_expect_r(8'hC1, make_data(160), 1'b1, RESP_OKAY);
+  end
+  endtask
+
+  task build_lock_effective_burst_test;
+    integer beat;
+  begin
+    $display("[TB] Lock effective sequence: lock=1 burst and mixed lock/non-lock should work");
+
+    // lock=1 burst write/read should be forwarded and completed with OKAY
+    add_aw(8'hC2, 32'h5080, 8'd2, 1'b1);
+    for (beat = 0; beat < 3; beat = beat + 1) begin
+      add_w(8'hC2, make_data(224 + beat), (beat == 2));
+    end
+    add_expect_b(8'hC2, RESP_OKAY);
+
+    add_ar(8'hC3, 32'h5080, 8'd2, 1'b1);
+    for (beat = 0; beat < 3; beat = beat + 1) begin
+      add_expect_r(8'hC3, make_data(224 + beat), (beat == 2), RESP_OKAY);
+    end
+
+    // lock and non-lock mixed outstanding writes should both complete normally
+    add_aw(8'hC4, 32'h50C0, 8'd0, 1'b1);
+    add_aw(8'hC5, 32'h50C8, 8'd0, 1'b0);
+    add_w(8'hC4, make_data(240), 1'b1);
+    add_w(8'hC5, make_data(241), 1'b1);
+    add_expect_b(8'hC4, RESP_OKAY);
+    add_expect_b(8'hC5, RESP_OKAY);
+
+    add_ar(8'hC6, 32'h50C0, 8'd0, 1'b1);
+    add_ar(8'hC7, 32'h50C8, 8'd0, 1'b0);
+    add_expect_r(8'hC6, make_data(240), 1'b1, RESP_OKAY);
+    add_expect_r(8'hC7, make_data(241), 1'b1, RESP_OKAY);
   end
   endtask
 
@@ -866,7 +898,8 @@ module axi3_to_axi4_tb;
     build_mixed_test();
     build_burst_test();
     build_outstanding_test();
-    build_lock_negative_test();
+    build_lock_translation_test();
+    build_lock_effective_burst_test();
     build_mixed_burst_interleave_test();
 
     repeat (5) @(posedge ACLK);
