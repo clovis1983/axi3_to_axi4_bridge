@@ -5,7 +5,7 @@ A Verilog RTL implementation of an AXI3 to AXI4 bridge that converts AXI3 protoc
 ## Features
 
 - **AXI3 to AXI4 Conversion**: Full conversion from AXI3 slave interface to AXI4 master interface
-- **LOCK Downgrade for AXI3->AXI4**: Accepts AXI3 `AWLOCK/ARLOCK`, but downgrades to normal AXI4 transfers
+- **AXI3 2-bit LOCK Policy**: Explicitly supports `00` (normal) and `01` (exclusive), rejects `10/11` with local `SLVERR`
 - **No Write Interleaving**: Does not support AXI3 write data interleaving (as per ARM recommendation)
 - **Multiple Outstanding Reads**: Supports multiple concurrent read transactions
 - **Multiple AW Outstanding**: Supports multiple write address outstanding with serialized write data
@@ -22,7 +22,7 @@ A Verilog RTL implementation of an AXI3 to AXI4 bridge that converts AXI3 protoc
 
 #### AXI4 Master Interface (Output)  
 - `M_AXI4_*`: All standard AXI4 signals with appropriate signal mapping
-- No dedicated `AxLOCK` output in this subset bridge; incoming AXI3 lock requests are downgraded to normal transfers
+- Exposes AXI4 `M_AXI4_AWLOCK/M_AXI4_ARLOCK` and performs explicit lock encoding conversion
 - QoS signals fixed to 0
 
 ### Key Implementation Details
@@ -38,7 +38,9 @@ A Verilog RTL implementation of an AXI3 to AXI4 bridge that converts AXI3 protoc
    - Proper B response handling
 
 3. **Protocol Compliance**:
-   - Downgrades AXI3 locked requests to normal AXI4 requests (lock semantics are not preserved)
+   - AXI3 `AxLOCK=01` is mapped to AXI4 `AxLOCK=1` (exclusive)
+   - AXI3 `AxLOCK=00` is mapped to AXI4 `AxLOCK=0` (normal)
+   - AXI3 `AxLOCK=10/11` is completed locally with `SLVERR` (not forwarded)
    - Fixes QoS to 0 as specified
    - Handles burst length differences between protocols
 
@@ -99,7 +101,7 @@ The testbench includes several test scenarios:
 
 | Feature | AXI3 | AXI4 | Bridge Handling |
 |---------|------|------|----------------|
-| LOCK signal | Present | Different encoding/semantics | Accepted then downgraded to normal transfer |
+| LOCK signal | 2-bit | 1-bit | `00->0`, `01->1`, `10/11->SLVERR` |
 | Write interleaving | Supported | Removed | Serialized by burst |
 | Burst length | 4-bit (max 16) | 8-bit (max 256) | Zero extended |
 | QoS | Present | Present | Fixed to 0 |
@@ -107,29 +109,36 @@ The testbench includes several test scenarios:
 
 ## Limitations
 
-- AXI3 lock semantics are not preserved end-to-end (downgraded to normal accesses)
+- AXI3 `AxLOCK=10/11` is unsupported and completed with local `SLVERR`
+- Exclusive support requires downstream AXI4 fabric/target to implement exclusive monitor semantics
 - No support for write data interleaving
 - Maximum burst length limited by AXI3 (16 beats)
 - Fixed QoS = 0 (configurable in future versions)
 
 ## Lock Handling
 
-This bridge accepts AXI3 requests with `AWLOCK/ARLOCK=1`, but converts them into normal AXI4 read/write transactions.
+This bridge interprets AXI3 `AWLOCK/ARLOCK` as 2-bit fields and uses the policy below:
 
-### Locked Write Handling
+- `2'b00`: supported normal access
+- `2'b01`: supported exclusive access (with restrictions)
+- `2'b10`: unsupported, local `SLVERR`
+- `2'b11`: illegal/reserved, local `SLVERR`
 
-- `S_AXI3_AWLOCK=1` write commands are accepted on AXI3 AW
-- The write address is forwarded to AXI4 AW as a normal write transaction
-- AXI3 W data is forwarded to AXI4 W in normal burst order
-- Write response comes from AXI4 B channel and is returned to AXI3 directly
-- No local `SLVERR` is generated only because `AWLOCK=1`
+### Exclusive Write Handling (`AWLOCK=2'b01`)
 
-### Locked Read Handling
+- AXI4 `M_AXI4_AWLOCK` is driven to `1`
+- Supported only when all conditions are met:
+  - single-beat (`AWLEN==0`)
+  - address aligned to transfer size
+  - no 4KB boundary crossing
+  - no other exclusive transaction already in-flight
+- If any condition fails, transaction is not forwarded; W beats are drained locally and B returns `SLVERR`
 
-- `S_AXI3_ARLOCK=1` read commands are accepted on AXI3 AR
-- The read address is forwarded to AXI4 AR as a normal read transaction
-- Read data/response comes from AXI4 R channel and is returned to AXI3 directly
-- No local single-beat error completion is generated only because `ARLOCK=1`
+### Exclusive Read Handling (`ARLOCK=2'b01`)
+
+- AXI4 `M_AXI4_ARLOCK` is driven to `1`
+- Same restrictions as exclusive write (single-beat/aligned/no-crossing/single outstanding exclusive)
+- If condition fails, transaction is not forwarded; bridge returns single-beat `RRESP=SLVERR`, `RLAST=1`, `RDATA=0`
 
 ### Backpressure and Resource Limits
 
@@ -137,11 +146,12 @@ This bridge accepts AXI3 requests with `AWLOCK/ARLOCK=1`, but converts them into
 - AXI3 AW acceptance is also backpressured if the AXI4 write-address forwarding FIFO is full
 - AXI3 AR acceptance is backpressured when the configured read outstanding limit is reached
 - AXI3 AR acceptance is also backpressured if the AXI4 read-address forwarding FIFO is full
+- AXI3 AR acceptance is backpressured if local read-error completion FIFO is full
 
 ### Response Arbitration Priority
 
-- AXI3-facing B/R responses follow AXI4 return ordering for forwarded transactions
-- The bridge does not insert lock-specific local error responses
+- AXI3-facing B/R muxes local error responses and forwarded AXI4 responses
+- Local lock-policy error responses have priority over forwarded responses when both are pending
 
 ### Reset Behavior
 
@@ -157,13 +167,13 @@ This bridge accepts AXI3 requests with `AWLOCK/ARLOCK=1`, but converts them into
 
 ### Error Containment Policy
 
-- AXI3 locked and non-locked accesses are translated and forwarded to AXI4 in the same datapath
-- Lock-related exclusivity/atomicity semantics are intentionally not preserved by this bridge
+- Unsupported/illegal lock requests are explicitly reported with `SLVERR`
+- No silent downgrade from exclusive/locked to normal transaction
 - AXI4 `AWQOS` and `ARQOS` are always driven to `0`
 
 ## Compliance
 
-This implementation follows ARM's recommendations for AXI4 migration:
-- AXI3 lock requests are accepted but downgraded to normal AXI4 transactions
+This implementation follows an explicit lock policy for AXI3-to-AXI4 migration:
+- AXI3 lock requests are mapped or rejected explicitly (`00/01` supported, `10/11` rejected)
 - Elimination of write interleaving for simplified design
 - Proper protocol conversion between versions

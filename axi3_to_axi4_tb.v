@@ -28,7 +28,7 @@ module axi3_to_axi4_tb;
   reg  [7:0]               S_AXI3_AWLEN;
   reg  [2:0]               S_AXI3_AWSIZE;
   reg  [1:0]               S_AXI3_AWBURST;
-  reg                      S_AXI3_AWLOCK;
+  reg  [1:0]               S_AXI3_AWLOCK;
   reg  [3:0]               S_AXI3_AWCACHE;
   reg  [2:0]               S_AXI3_AWPROT;
   reg  [3:0]               S_AXI3_AWQOS;
@@ -52,7 +52,7 @@ module axi3_to_axi4_tb;
   reg  [7:0]               S_AXI3_ARLEN;
   reg  [2:0]               S_AXI3_ARSIZE;
   reg  [1:0]               S_AXI3_ARBURST;
-  reg                      S_AXI3_ARLOCK;
+  reg  [1:0]               S_AXI3_ARLOCK;
   reg  [3:0]               S_AXI3_ARCACHE;
   reg  [2:0]               S_AXI3_ARPROT;
   reg  [3:0]               S_AXI3_ARQOS;
@@ -73,6 +73,7 @@ module axi3_to_axi4_tb;
   wire [1:0]               M_AXI4_AWBURST;
   wire [3:0]               M_AXI4_AWCACHE;
   wire [2:0]               M_AXI4_AWPROT;
+  wire                     M_AXI4_AWLOCK;
   wire [3:0]               M_AXI4_AWQOS;
   wire                     M_AXI4_AWVALID;
   reg                      M_AXI4_AWREADY;
@@ -95,6 +96,7 @@ module axi3_to_axi4_tb;
   wire [1:0]               M_AXI4_ARBURST;
   wire [3:0]               M_AXI4_ARCACHE;
   wire [2:0]               M_AXI4_ARPROT;
+  wire                     M_AXI4_ARLOCK;
   wire [3:0]               M_AXI4_ARQOS;
   wire                     M_AXI4_ARVALID;
   reg                      M_AXI4_ARREADY;
@@ -107,6 +109,8 @@ module axi3_to_axi4_tb;
   wire                     M_AXI4_RREADY;
 
   integer err_cnt;
+  integer aw_excl_seen;
+  integer ar_excl_seen;
   reg [1023:0] fsdb_name;
 
   reg [2:0]            script_op        [0:SCRIPT_DEPTH-1];
@@ -114,6 +118,7 @@ module axi3_to_axi4_tb;
   reg [ADDR_WIDTH-1:0] script_addr      [0:SCRIPT_DEPTH-1];
   reg [7:0]            script_len       [0:SCRIPT_DEPTH-1];
   reg [DATA_WIDTH-1:0] script_data      [0:SCRIPT_DEPTH-1];
+  reg [1:0]            script_lock      [0:SCRIPT_DEPTH-1];
   reg                  script_last      [0:SCRIPT_DEPTH-1];
   reg [1:0]            script_resp      [0:SCRIPT_DEPTH-1];
   integer script_count;
@@ -180,12 +185,12 @@ module axi3_to_axi4_tb;
     .S_AXI3_RID(S_AXI3_RID), .S_AXI3_RDATA(S_AXI3_RDATA), .S_AXI3_RRESP(S_AXI3_RRESP), .S_AXI3_RLAST(S_AXI3_RLAST),
     .S_AXI3_RVALID(S_AXI3_RVALID), .S_AXI3_RREADY(S_AXI3_RREADY),
     .M_AXI4_AWID(M_AXI4_AWID), .M_AXI4_AWADDR(M_AXI4_AWADDR), .M_AXI4_AWLEN(M_AXI4_AWLEN), .M_AXI4_AWSIZE(M_AXI4_AWSIZE),
-    .M_AXI4_AWBURST(M_AXI4_AWBURST), .M_AXI4_AWCACHE(M_AXI4_AWCACHE), .M_AXI4_AWPROT(M_AXI4_AWPROT), .M_AXI4_AWQOS(M_AXI4_AWQOS),
+    .M_AXI4_AWBURST(M_AXI4_AWBURST), .M_AXI4_AWCACHE(M_AXI4_AWCACHE), .M_AXI4_AWPROT(M_AXI4_AWPROT), .M_AXI4_AWLOCK(M_AXI4_AWLOCK), .M_AXI4_AWQOS(M_AXI4_AWQOS),
     .M_AXI4_AWVALID(M_AXI4_AWVALID), .M_AXI4_AWREADY(M_AXI4_AWREADY), .M_AXI4_WDATA(M_AXI4_WDATA), .M_AXI4_WSTRB(M_AXI4_WSTRB),
     .M_AXI4_WLAST(M_AXI4_WLAST), .M_AXI4_WVALID(M_AXI4_WVALID), .M_AXI4_WREADY(M_AXI4_WREADY), .M_AXI4_BID(M_AXI4_BID),
     .M_AXI4_BRESP(M_AXI4_BRESP), .M_AXI4_BVALID(M_AXI4_BVALID), .M_AXI4_BREADY(M_AXI4_BREADY),
     .M_AXI4_ARID(M_AXI4_ARID), .M_AXI4_ARADDR(M_AXI4_ARADDR), .M_AXI4_ARLEN(M_AXI4_ARLEN), .M_AXI4_ARSIZE(M_AXI4_ARSIZE),
-    .M_AXI4_ARBURST(M_AXI4_ARBURST), .M_AXI4_ARCACHE(M_AXI4_ARCACHE), .M_AXI4_ARPROT(M_AXI4_ARPROT), .M_AXI4_ARQOS(M_AXI4_ARQOS),
+    .M_AXI4_ARBURST(M_AXI4_ARBURST), .M_AXI4_ARCACHE(M_AXI4_ARCACHE), .M_AXI4_ARPROT(M_AXI4_ARPROT), .M_AXI4_ARLOCK(M_AXI4_ARLOCK), .M_AXI4_ARQOS(M_AXI4_ARQOS),
     .M_AXI4_ARVALID(M_AXI4_ARVALID), .M_AXI4_ARREADY(M_AXI4_ARREADY), .M_AXI4_RID(M_AXI4_RID), .M_AXI4_RDATA(M_AXI4_RDATA),
     .M_AXI4_RRESP(M_AXI4_RRESP), .M_AXI4_RLAST(M_AXI4_RLAST), .M_AXI4_RVALID(M_AXI4_RVALID), .M_AXI4_RREADY(M_AXI4_RREADY)
   );
@@ -249,6 +254,7 @@ module axi3_to_axi4_tb;
     input [ADDR_WIDTH-1:0] addr,
     input [7:0] len,
     input [DATA_WIDTH-1:0] data,
+    input [1:0] lock,
     input last,
     input [1:0] resp
   );
@@ -258,33 +264,34 @@ module axi3_to_axi4_tb;
     script_addr[script_count] = addr;
     script_len[script_count]  = len;
     script_data[script_count] = data;
+    script_lock[script_count] = lock;
     script_last[script_count] = last;
     script_resp[script_count] = resp;
     script_count = script_count + 1;
   end
   endtask
 
-  task add_aw(input [ID_WIDTH-1:0] id, input [ADDR_WIDTH-1:0] addr, input [7:0] len, input lock);
+  task add_aw(input [ID_WIDTH-1:0] id, input [ADDR_WIDTH-1:0] addr, input [7:0] len, input [1:0] lock);
   begin
-    add_step(OP_AW, id, addr, len, {DATA_WIDTH{1'b0}}, lock, RESP_OKAY);
+    add_step(OP_AW, id, addr, len, {DATA_WIDTH{1'b0}}, lock, 1'b0, RESP_OKAY);
   end
   endtask
 
   task add_w(input [ID_WIDTH-1:0] id, input [DATA_WIDTH-1:0] data, input last);
   begin
-    add_step(OP_W, id, {ADDR_WIDTH{1'b0}}, 8'd0, data, last, RESP_OKAY);
+    add_step(OP_W, id, {ADDR_WIDTH{1'b0}}, 8'd0, data, 2'b00, last, RESP_OKAY);
   end
   endtask
 
-  task add_ar(input [ID_WIDTH-1:0] id, input [ADDR_WIDTH-1:0] addr, input [7:0] len, input lock);
+  task add_ar(input [ID_WIDTH-1:0] id, input [ADDR_WIDTH-1:0] addr, input [7:0] len, input [1:0] lock);
   begin
-    add_step(OP_AR, id, addr, len, {DATA_WIDTH{1'b0}}, lock, RESP_OKAY);
+    add_step(OP_AR, id, addr, len, {DATA_WIDTH{1'b0}}, lock, 1'b0, RESP_OKAY);
   end
   endtask
 
   task add_expect_b(input [ID_WIDTH-1:0] id, input [1:0] resp);
   begin
-    add_step(OP_EXP_B, id, {ADDR_WIDTH{1'b0}}, 8'd0, {DATA_WIDTH{1'b0}}, 1'b0, resp);
+    add_step(OP_EXP_B, id, {ADDR_WIDTH{1'b0}}, 8'd0, {DATA_WIDTH{1'b0}}, 2'b00, 1'b0, resp);
   end
   endtask
 
@@ -295,7 +302,7 @@ module axi3_to_axi4_tb;
     input [1:0] resp
   );
   begin
-    add_step(OP_EXP_R, id, {ADDR_WIDTH{1'b0}}, 8'd0, data, last, resp);
+    add_step(OP_EXP_R, id, {ADDR_WIDTH{1'b0}}, 8'd0, data, 2'b00, last, resp);
   end
   endtask
 
@@ -308,7 +315,7 @@ module axi3_to_axi4_tb;
     for (idx = 0; idx < 10; idx = idx + 1) begin
       len = pseudo_len(idx);
       wr_seq_len[idx] = len;
-      add_aw(idx[ID_WIDTH-1:0], 32'h1000 + idx * 32, len, 1'b0);
+      add_aw(idx[ID_WIDTH-1:0], 32'h1000 + idx * 32, len, 2'b00);
       for (beat = 0; beat <= len; beat = beat + 1) begin
         add_w(idx[ID_WIDTH-1:0], make_data((idx * 16) + beat), (beat == len));
       end
@@ -328,7 +335,7 @@ module axi3_to_axi4_tb;
       id = 8'h40 + idx[7:0];
       len = wr_seq_len[idx];
       rd_seq_len[idx] = len;
-      add_ar(id, 32'h1000 + idx * 32, len, 1'b0);
+      add_ar(id, 32'h1000 + idx * 32, len, 2'b00);
       for (beat = 0; beat <= len; beat = beat + 1) begin
         add_expect_r(id, make_data((idx * 16) + beat), (beat == len), RESP_OKAY);
       end
@@ -344,11 +351,11 @@ module axi3_to_axi4_tb;
     for (idx = 0; idx < 10; idx = idx + 1) begin
       id = 8'h80 + idx[7:0];
       if ((idx % 2) == 0) begin
-        add_aw(id, 32'h2000 + (idx / 2) * 8, 8'd0, 1'b0);
+        add_aw(id, 32'h2000 + (idx / 2) * 8, 8'd0, 2'b00);
         add_w(id, make_data(16 + idx), 1'b1);
         add_expect_b(id, RESP_OKAY);
       end else begin
-        add_ar(id, 32'h2000 + (idx / 2) * 8, 8'd0, 1'b0);
+        add_ar(id, 32'h2000 + (idx / 2) * 8, 8'd0, 2'b00);
         add_expect_r(id, make_data(16 + idx - 1), 1'b1, RESP_OKAY);
       end
     end
@@ -359,22 +366,22 @@ module axi3_to_axi4_tb;
     integer beat;
   begin
     $display("[TB] Burst sequence: multi-beat write/read");
-    add_aw(8'hA0, 32'h3000, 8'd3, 1'b0);
+    add_aw(8'hA0, 32'h3000, 8'd3, 2'b00);
     for (beat = 0; beat < 4; beat = beat + 1) begin
       add_w(8'hA0, make_data(32 + beat), (beat == 3));
     end
     add_expect_b(8'hA0, RESP_OKAY);
-    add_ar(8'hA1, 32'h3000, 8'd3, 1'b0);
+    add_ar(8'hA1, 32'h3000, 8'd3, 2'b00);
     for (beat = 0; beat < 4; beat = beat + 1) begin
       add_expect_r(8'hA1, make_data(32 + beat), (beat == 3), RESP_OKAY);
     end
 
-    add_aw(8'hA2, 32'h3040, 8'd1, 1'b0);
+    add_aw(8'hA2, 32'h3040, 8'd1, 2'b00);
     for (beat = 0; beat < 2; beat = beat + 1) begin
       add_w(8'hA2, make_data(64 + beat), (beat == 1));
     end
     add_expect_b(8'hA2, RESP_OKAY);
-    add_ar(8'hA3, 32'h3040, 8'd1, 1'b0);
+    add_ar(8'hA3, 32'h3040, 8'd1, 2'b00);
     for (beat = 0; beat < 2; beat = beat + 1) begin
       add_expect_r(8'hA3, make_data(64 + beat), (beat == 1), RESP_OKAY);
     end
@@ -386,8 +393,8 @@ module axi3_to_axi4_tb;
   begin
     $display("[TB] Outstanding sequence: multiple AW/AR before responses");
 
-    add_aw(8'hB0, 32'h4000, 8'd1, 1'b0);
-    add_aw(8'hB1, 32'h4010, 8'd1, 1'b0);
+    add_aw(8'hB0, 32'h4000, 8'd1, 2'b00);
+    add_aw(8'hB1, 32'h4010, 8'd1, 2'b00);
     for (beat = 0; beat < 2; beat = beat + 1) begin
       add_w(8'hB0, make_data(96 + beat), (beat == 1));
     end
@@ -397,8 +404,8 @@ module axi3_to_axi4_tb;
     add_expect_b(8'hB0, RESP_OKAY);
     add_expect_b(8'hB1, RESP_OKAY);
 
-    add_ar(8'hB2, 32'h4000, 8'd1, 1'b0);
-    add_ar(8'hB3, 32'h4010, 8'd1, 1'b0);
+    add_ar(8'hB2, 32'h4000, 8'd1, 2'b00);
+    add_ar(8'hB3, 32'h4010, 8'd1, 2'b00);
     for (beat = 0; beat < 2; beat = beat + 1) begin
       add_expect_r(8'hB2, make_data(96 + beat), (beat == 1), RESP_OKAY);
     end
@@ -410,45 +417,53 @@ module axi3_to_axi4_tb;
 
   task build_lock_translation_test;
   begin
-    $display("[TB] Lock translation sequence: locked write/read are downgraded and forwarded");
-    add_aw(8'hC0, 32'h5000, 8'd0, 1'b1);
+    $display("[TB] Lock translation sequence: AXI3 exclusive(01) maps to AXI4 AxLOCK=1");
+    add_aw(8'hC0, 32'h5000, 8'd0, 2'b01);
     add_w(8'hC0, make_data(160), 1'b1);
     add_expect_b(8'hC0, RESP_OKAY);
 
-    add_ar(8'hC1, 32'h5000, 8'd0, 1'b1);
+    add_ar(8'hC1, 32'h5000, 8'd0, 2'b01);
     add_expect_r(8'hC1, make_data(160), 1'b1, RESP_OKAY);
   end
   endtask
 
   task build_lock_effective_burst_test;
-    integer beat;
   begin
-    $display("[TB] Lock effective sequence: lock=1 burst and mixed lock/non-lock should work");
+    $display("[TB] Lock policy sequence: unsupported/illegal/restricted exclusive should SLVERR");
 
-    // lock=1 burst write/read should be forwarded and completed with OKAY
-    add_aw(8'hC2, 32'h5080, 8'd2, 1'b1);
-    for (beat = 0; beat < 3; beat = beat + 1) begin
-      add_w(8'hC2, make_data(224 + beat), (beat == 2));
-    end
-    add_expect_b(8'hC2, RESP_OKAY);
+    // unsupported AXI3 lock encodings
+    add_aw(8'hC2, 32'h5080, 8'd0, 2'b10);
+    add_w(8'hC2, make_data(224), 1'b1);
+    add_expect_b(8'hC2, RESP_SLVERR);
+    add_aw(8'hC3, 32'h5088, 8'd0, 2'b11);
+    add_w(8'hC3, make_data(225), 1'b1);
+    add_expect_b(8'hC3, RESP_SLVERR);
+    add_ar(8'hC4, 32'h5080, 8'd0, 2'b10);
+    add_expect_r(8'hC4, {DATA_WIDTH{1'b0}}, 1'b1, RESP_SLVERR);
+    add_ar(8'hC5, 32'h5088, 8'd0, 2'b11);
+    add_expect_r(8'hC5, {DATA_WIDTH{1'b0}}, 1'b1, RESP_SLVERR);
 
-    add_ar(8'hC3, 32'h5080, 8'd2, 1'b1);
-    for (beat = 0; beat < 3; beat = beat + 1) begin
-      add_expect_r(8'hC3, make_data(224 + beat), (beat == 2), RESP_OKAY);
-    end
+    // exclusive restrictions: single beat + aligned
+    add_aw(8'hC6, 32'h50A0, 8'd2, 2'b01);
+    add_w(8'hC6, make_data(226), 1'b0);
+    add_w(8'hC6, make_data(227), 1'b0);
+    add_w(8'hC6, make_data(228), 1'b1);
+    add_expect_b(8'hC6, RESP_SLVERR);
+    add_ar(8'hC7, 32'h50A0, 8'd2, 2'b01);
+    add_expect_r(8'hC7, {DATA_WIDTH{1'b0}}, 1'b1, RESP_SLVERR);
+    add_aw(8'hC8, 32'h50A4, 8'd0, 2'b01);
+    add_w(8'hC8, make_data(229), 1'b1);
+    add_expect_b(8'hC8, RESP_SLVERR);
+    add_ar(8'hC9, 32'h50A4, 8'd0, 2'b01);
+    add_expect_r(8'hC9, {DATA_WIDTH{1'b0}}, 1'b1, RESP_SLVERR);
 
-    // lock and non-lock mixed outstanding writes should both complete normally
-    add_aw(8'hC4, 32'h50C0, 8'd0, 1'b1);
-    add_aw(8'hC5, 32'h50C8, 8'd0, 1'b0);
-    add_w(8'hC4, make_data(240), 1'b1);
-    add_w(8'hC5, make_data(241), 1'b1);
-    add_expect_b(8'hC4, RESP_OKAY);
-    add_expect_b(8'hC5, RESP_OKAY);
-
-    add_ar(8'hC6, 32'h50C0, 8'd0, 1'b1);
-    add_ar(8'hC7, 32'h50C8, 8'd0, 1'b0);
-    add_expect_r(8'hC6, make_data(240), 1'b1, RESP_OKAY);
-    add_expect_r(8'hC7, make_data(241), 1'b1, RESP_OKAY);
+    // no multiple outstanding exclusive
+    add_aw(8'hCA, 32'h50C0, 8'd0, 2'b01);
+    add_aw(8'hCB, 32'h50C8, 8'd0, 2'b01);
+    add_w(8'hCA, make_data(230), 1'b1);
+    add_w(8'hCB, make_data(231), 1'b1);
+    add_expect_b(8'hCB, RESP_SLVERR);
+    add_expect_b(8'hCA, RESP_OKAY);
   end
   endtask
 
@@ -456,24 +471,24 @@ module axi3_to_axi4_tb;
     integer beat;
   begin
     $display("[TB] Mixed burst sequence: write/read interleave");
-    add_aw(8'hD0, 32'h6000, 8'd2, 1'b0);
+    add_aw(8'hD0, 32'h6000, 8'd2, 2'b00);
     for (beat = 0; beat < 3; beat = beat + 1) begin
       add_w(8'hD0, make_data(192 + beat), (beat == 2));
     end
     add_expect_b(8'hD0, RESP_OKAY);
-    add_ar(8'hD1, 32'h6000, 8'd2, 1'b0);
+    add_ar(8'hD1, 32'h6000, 8'd2, 2'b00);
     for (beat = 0; beat < 3; beat = beat + 1) begin
       add_expect_r(8'hD1, make_data(192 + beat), (beat == 2), RESP_OKAY);
     end
 
-    add_aw(8'hD2, 32'h6040, 8'd2, 1'b0);
-    add_ar(8'hD3, 32'h6000, 8'd0, 1'b0);
+    add_aw(8'hD2, 32'h6040, 8'd2, 2'b00);
+    add_ar(8'hD3, 32'h6000, 8'd0, 2'b00);
     for (beat = 0; beat < 3; beat = beat + 1) begin
       add_w(8'hD2, make_data(208 + beat), (beat == 2));
     end
     add_expect_b(8'hD2, RESP_OKAY);
     add_expect_r(8'hD3, make_data(192), 1'b1, RESP_OKAY);
-    add_ar(8'hD4, 32'h6040, 8'd2, 1'b0);
+    add_ar(8'hD4, 32'h6040, 8'd2, 2'b00);
     for (beat = 0; beat < 3; beat = beat + 1) begin
       add_expect_r(8'hD4, make_data(208 + beat), (beat == 2), RESP_OKAY);
     end
@@ -487,7 +502,7 @@ module axi3_to_axi4_tb;
     S_AXI3_AWLEN   = '0;
     S_AXI3_AWSIZE  = '0;
     S_AXI3_AWBURST = '0;
-    S_AXI3_AWLOCK  = 1'b0;
+    S_AXI3_AWLOCK  = 2'b00;
     S_AXI3_AWCACHE = '0;
     S_AXI3_AWPROT  = '0;
     S_AXI3_AWQOS   = '0;
@@ -506,7 +521,7 @@ module axi3_to_axi4_tb;
     S_AXI3_ARLEN   = '0;
     S_AXI3_ARSIZE  = '0;
     S_AXI3_ARBURST = '0;
-    S_AXI3_ARLOCK  = 1'b0;
+    S_AXI3_ARLOCK  = 2'b00;
     S_AXI3_ARCACHE = '0;
     S_AXI3_ARPROT  = '0;
     S_AXI3_ARQOS   = '0;
@@ -527,9 +542,27 @@ module axi3_to_axi4_tb;
         $display("ERROR: AWQOS expected 0, got %0h @%0t", M_AXI4_AWQOS, $time);
         err_cnt = err_cnt + 1;
       end
+      if (M_AXI4_AWVALID && M_AXI4_AWREADY) begin
+        if ((M_AXI4_AWLOCK !== 1'b0) && (M_AXI4_AWLOCK !== 1'b1)) begin
+          $display("ERROR: AWLOCK expected 0/1, got %0b @%0t", M_AXI4_AWLOCK, $time);
+          err_cnt = err_cnt + 1;
+        end
+        if (M_AXI4_AWLOCK) begin
+          aw_excl_seen = aw_excl_seen + 1;
+        end
+      end
       if (M_AXI4_ARVALID && M_AXI4_ARREADY && (M_AXI4_ARQOS !== 4'h0)) begin
         $display("ERROR: ARQOS expected 0, got %0h @%0t", M_AXI4_ARQOS, $time);
         err_cnt = err_cnt + 1;
+      end
+      if (M_AXI4_ARVALID && M_AXI4_ARREADY) begin
+        if ((M_AXI4_ARLOCK !== 1'b0) && (M_AXI4_ARLOCK !== 1'b1)) begin
+          $display("ERROR: ARLOCK expected 0/1, got %0b @%0t", M_AXI4_ARLOCK, $time);
+          err_cnt = err_cnt + 1;
+        end
+        if (M_AXI4_ARLOCK) begin
+          ar_excl_seen = ar_excl_seen + 1;
+        end
       end
     end
   end
@@ -699,7 +732,7 @@ module axi3_to_axi4_tb;
       S_AXI3_AWLEN   <= '0;
       S_AXI3_AWSIZE  <= '0;
       S_AXI3_AWBURST <= '0;
-      S_AXI3_AWLOCK  <= 1'b0;
+      S_AXI3_AWLOCK  <= 2'b00;
       S_AXI3_AWCACHE <= '0;
       S_AXI3_AWPROT  <= '0;
       S_AXI3_AWQOS   <= '0;
@@ -718,7 +751,7 @@ module axi3_to_axi4_tb;
       S_AXI3_ARLEN   <= '0;
       S_AXI3_ARSIZE  <= '0;
       S_AXI3_ARBURST <= '0;
-      S_AXI3_ARLOCK  <= 1'b0;
+      S_AXI3_ARLOCK  <= 2'b00;
       S_AXI3_ARCACHE <= '0;
       S_AXI3_ARPROT  <= '0;
       S_AXI3_ARQOS   <= '0;
@@ -739,7 +772,7 @@ module axi3_to_axi4_tb;
               S_AXI3_AWLEN   <= script_len[drv_pc];
               S_AXI3_AWSIZE  <= 3'b011;
               S_AXI3_AWBURST <= 2'b01;
-              S_AXI3_AWLOCK  <= script_last[drv_pc];
+              S_AXI3_AWLOCK  <= script_lock[drv_pc];
               S_AXI3_AWCACHE <= 4'h3;
               S_AXI3_AWPROT  <= 3'h0;
               S_AXI3_AWQOS   <= 4'hF;
@@ -758,7 +791,7 @@ module axi3_to_axi4_tb;
               S_AXI3_ARLEN   <= script_len[drv_pc];
               S_AXI3_ARSIZE  <= 3'b011;
               S_AXI3_ARBURST <= 2'b01;
-              S_AXI3_ARLOCK  <= script_last[drv_pc];
+              S_AXI3_ARLOCK  <= script_lock[drv_pc];
               S_AXI3_ARCACHE <= 4'h3;
               S_AXI3_ARPROT  <= 3'h0;
               S_AXI3_ARQOS   <= 4'hA;
@@ -780,7 +813,7 @@ module axi3_to_axi4_tb;
             OP_AW: begin
               if (S_AXI3_AWVALID && S_AXI3_AWREADY) begin
                 S_AXI3_AWVALID <= 1'b0;
-                S_AXI3_AWLOCK  <= 1'b0;
+                S_AXI3_AWLOCK  <= 2'b00;
                 active_valid   <= 1'b0;
                 drv_pc         <= drv_pc + 1;
               end
@@ -796,7 +829,7 @@ module axi3_to_axi4_tb;
             OP_AR: begin
               if (S_AXI3_ARVALID && S_AXI3_ARREADY) begin
                 S_AXI3_ARVALID <= 1'b0;
-                S_AXI3_ARLOCK  <= 1'b0;
+                S_AXI3_ARLOCK  <= 2'b00;
                 active_valid   <= 1'b0;
                 drv_pc         <= drv_pc + 1;
               end
@@ -837,7 +870,7 @@ module axi3_to_axi4_tb;
             case (active_op)
               OP_AW: begin
                 S_AXI3_AWVALID <= 1'b0;
-                S_AXI3_AWLOCK  <= 1'b0;
+                S_AXI3_AWLOCK  <= 2'b00;
               end
               OP_W: begin
                 S_AXI3_WVALID <= 1'b0;
@@ -845,7 +878,7 @@ module axi3_to_axi4_tb;
               end
               OP_AR: begin
                 S_AXI3_ARVALID <= 1'b0;
-                S_AXI3_ARLOCK  <= 1'b0;
+                S_AXI3_ARLOCK  <= 2'b00;
               end
               OP_EXP_B: begin
                 S_AXI3_BREADY <= 1'b0;
@@ -888,6 +921,8 @@ module axi3_to_axi4_tb;
     end
 
     err_cnt = 0;
+    aw_excl_seen = 0;
+    ar_excl_seen = 0;
     script_count = 0;
     tests_loaded = 1'b0;
     clear_master_outputs();
@@ -908,6 +943,15 @@ module axi3_to_axi4_tb;
 
     wait (drv_pc == script_count && !active_valid);
     repeat (10) @(posedge ACLK);
+
+    if (aw_excl_seen == 0) begin
+      $display("ERROR: expected at least one AXI4 AWLOCK=1 handshake");
+      err_cnt = err_cnt + 1;
+    end
+    if (ar_excl_seen == 0) begin
+      $display("ERROR: expected at least one AXI4 ARLOCK=1 handshake");
+      err_cnt = err_cnt + 1;
+    end
 
     if (err_cnt == 0) begin
       $display("[TB] PASS");
